@@ -39,6 +39,12 @@ test-results/
 # Azure
 .azure/
 
+# CDK
+infrastructure/node_modules/
+infrastructure/dist/
+cdk-outputs.json
+cdk.context.json
+
 # Misc
 *.log
 *.bak

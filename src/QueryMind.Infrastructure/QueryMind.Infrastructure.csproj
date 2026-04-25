@@ -14,8 +14,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.4" />
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.20.0" />
-    <PackageReference Include="Azure.Search.Documents" Version="11.6.0" />
+    <PackageReference Include="AWSSDK.S3" Version="3.7.307.11" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
     <PackageReference Include="System.Text.Json" Version="8.0.4" />

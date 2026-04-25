@@ -16,8 +16,8 @@ public static class InfrastructureServiceExtensions
             options.UseNpgsql(configuration.GetConnectionString("Postgres"),
                 npgsql => npgsql.MigrationsAssembly(typeof(QueryMindDbContext).Assembly.FullName)));
 
-        services.AddScoped<IStorageService, BlobStorageService>();
-        services.AddScoped<ISchemaSearchService, AzureSearchService>();
+        services.AddScoped<IStorageService, S3StorageService>();
+        services.AddScoped<ISchemaSearchService, SimpleSchemaSearchService>();
         services.AddScoped<IAuditService, AuditService>();
         services.AddSingleton<StripeWebhookService>();
 

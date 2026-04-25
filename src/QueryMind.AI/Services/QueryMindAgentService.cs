@@ -28,10 +28,8 @@ public partial class QueryMindAgentService(
     {
         var tools = new QueryMindTools(searchService);
 
-        var schemaContext = request.SchemaContext
-            ?? (request.SchemaId != Guid.Empty
-                ? await searchService.SearchSchemaContextAsync(request.SchemaId, request.UserMessage, 6, ct)
-                : null);
+        // Schema context is fetched and passed in by SessionsController before the agent is called
+        var schemaContext = request.SchemaContext;
 
         var systemPrompt = SystemPromptBuilder.Build(request.PreferredDialect, schemaContext);
 
@@ -204,13 +202,3 @@ public partial class QueryMindAgentService(
     private static partial Regex QueryBlockRegex();
 }
 
-internal static class AgentRequestExtensions
-{
-    public static Guid SchemaId(this AgentRequest r) =>
-        r.SchemaContext != null ? Guid.Empty : Guid.Empty;
-}
-
-public static class AgentRequestEx
-{
-    public static Guid GetSchemaId(this AgentRequest r) => Guid.Empty;
-}

@@ -1,0 +1,187 @@
+name: Deploy QueryMind to AWS
+
+on:
+  push:
+    branches: [main, claude/querymind-ai-platform-YXjXt]
+  workflow_dispatch:   # Allow manual trigger from GitHub UI
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPO_NAME: querymind-api
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. AWS Credentials ─────────────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ── 3. Ensure ECR repo exists (idempotent) ────────────────────────────
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names $ECR_REPO_NAME \
+            --region $AWS_REGION 2>/dev/null \
+          || aws ecr create-repository \
+              --repository-name $ECR_REPO_NAME \
+              --image-scanning-configuration scanOnPush=true \
+              --region $AWS_REGION
+
+      # ── 4. Build & push API Docker image ──────────────────────────────────
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPO_NAME"
+          docker build \
+            -f deploy/docker/Dockerfile.api \
+            -t "$IMAGE_URI:$GITHUB_SHA" \
+            -t "$IMAGE_URI:latest" \
+            .
+          docker push "$IMAGE_URI:$GITHUB_SHA"
+          docker push "$IMAGE_URI:latest"
+          echo "image=$IMAGE_URI:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      # ── 5. CDK bootstrap & deploy ─────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infrastructure
+        run: npm ci
+
+      - name: CDK Bootstrap (idempotent — safe to run every time)
+        working-directory: infrastructure
+        run: npx cdk bootstrap --require-approval never
+
+      - name: CDK Deploy
+        working-directory: infrastructure
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          npx cdk deploy QueryMindStack \
+            --require-approval never \
+            --context imageTag=$GITHUB_SHA \
+            --outputs-file ../cdk-outputs.json
+
+      # ── 6. Read CDK outputs ───────────────────────────────────────────────
+      - name: Parse CDK outputs
+        id: cdk
+        run: |
+          echo "frontend_bucket=$(jq -r '.QueryMindStack.FrontendBucketName' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "cf_dist_id=$(jq -r '.QueryMindStack.CloudFrontDistributionId' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "apprunner_arn=$(jq -r '.QueryMindStack.AppRunnerServiceArn' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(jq -r '.QueryMindStack.ApiUrl' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "schema_bucket=$(jq -r '.QueryMindStack.SchemaBucketName' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "db_endpoint=$(jq -r '.QueryMindStack.DbEndpoint' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$(jq -r '.QueryMindStack.FrontendUrl' cdk-outputs.json)" >> "$GITHUB_OUTPUT"
+
+      # ── 7. Inject Postgres connection string into App Runner ──────────────
+      # App Runner env vars are updated here so the full connection string
+      # (which includes the DB endpoint only known after CDK deploy) is set.
+      - name: Update App Runner environment (Postgres + CORS)
+        env:
+          SERVICE_ARN: ${{ steps.cdk.outputs.apprunner_arn }}
+          DB_ENDPOINT: ${{ steps.cdk.outputs.db_endpoint }}
+          FRONTEND_URL: ${{ steps.cdk.outputs.frontend_url }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          PG_CONN="Host=${DB_ENDPOINT};Database=querymind;Username=querymind;Password=${DB_PASSWORD};SslMode=Require;Trust Server Certificate=true"
+
+          aws apprunner update-service \
+            --service-arn "$SERVICE_ARN" \
+            --source-configuration "{
+              \"ImageRepository\": {
+                \"ImageConfiguration\": {
+                  \"RuntimeEnvironmentVariables\": {
+                    \"ConnectionStrings__Postgres\": \"${PG_CONN}\",
+                    \"Cors__Origins__0\": \"${FRONTEND_URL}\"
+                  }
+                }
+              }
+            }" \
+            --region $AWS_REGION || true
+          # Note: App Runner update-service is eventually consistent — the
+          # start-deployment step below will use the updated config.
+
+      # ── 8. Trigger App Runner deployment ──────────────────────────────────
+      - name: Start App Runner deployment
+        env:
+          SERVICE_ARN: ${{ steps.cdk.outputs.apprunner_arn }}
+        run: |
+          aws apprunner start-deployment \
+            --service-arn "$SERVICE_ARN" \
+            --region $AWS_REGION
+
+      # ── 9. Build React frontend ───────────────────────────────────────────
+      - name: Set up Node.js for frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ steps.cdk.outputs.frontend_url }}
+        run: npm run build
+
+      # ── 10. Deploy frontend to S3 + invalidate CloudFront ─────────────────
+      - name: Sync frontend to S3
+        env:
+          BUCKET: ${{ steps.cdk.outputs.frontend_bucket }}
+        run: |
+          aws s3 sync frontend/dist "s3://$BUCKET" \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "index.html"
+
+          # index.html — no cache so users always get the latest SPA shell
+          aws s3 cp frontend/dist/index.html "s3://$BUCKET/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+      - name: Invalidate CloudFront cache
+        env:
+          CF_DIST_ID: ${{ steps.cdk.outputs.cf_dist_id }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CF_DIST_ID" \
+            --paths "/*"
+
+      # ── 11. Summary ───────────────────────────────────────────────────────
+      - name: Deployment summary
+        run: |
+          echo "## QueryMind Deployment Complete 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend | ${{ steps.cdk.outputs.frontend_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| API | ${{ steps.cdk.outputs.api_url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`$ECR_REPO_NAME:$GITHUB_SHA\` |" >> $GITHUB_STEP_SUMMARY

@@ -20,6 +20,7 @@ namespace QueryMind.API.Controllers;
 public class SessionsController(
     ISender mediator,
     IQueryMindAgent agent,
+    ISchemaSearchService schemaSearch,
     QueryMindDbContext db
 ) : ControllerBase
 {
@@ -65,8 +66,8 @@ public class SessionsController(
             .ToList();
 
         string? schemaContext = null;
-        if (session.Schema?.ParsedJson != null)
-            schemaContext = $"[Schema: {session.Schema.Name}]\n";
+        if (session.SchemaId.HasValue)
+            schemaContext = await schemaSearch.SearchSchemaContextAsync(session.SchemaId.Value, body.Message, 5, ct);
 
         var agentRequest = new AgentRequest(
             sessionId,
