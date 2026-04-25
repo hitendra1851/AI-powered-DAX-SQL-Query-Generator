@@ -1,0 +1,131 @@
+{
+  "model": {
+    "tables": [
+      {
+        "name": "Sales",
+        "columns": [
+          { "name": "SalesId", "dataType": "int64", "isKey": true },
+          { "name": "OrderDate", "dataType": "dateTime" },
+          { "name": "ProductId", "dataType": "int64" },
+          { "name": "CustomerId", "dataType": "int64" },
+          { "name": "Quantity", "dataType": "int64" },
+          { "name": "UnitPrice", "dataType": "decimal" },
+          { "name": "Discount", "dataType": "decimal" },
+          { "name": "SalesAmount", "dataType": "decimal" },
+          { "name": "CostAmount", "dataType": "decimal" },
+          { "name": "RegionId", "dataType": "int64" }
+        ],
+        "measures": [
+          {
+            "name": "Total Sales",
+            "expression": "SUM(Sales[SalesAmount])",
+            "formatString": "#,##0.00",
+            "description": "Sum of all sales amounts"
+          },
+          {
+            "name": "Total Cost",
+            "expression": "SUM(Sales[CostAmount])",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "Gross Margin",
+            "expression": "[Total Sales] - [Total Cost]",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "Gross Margin %",
+            "expression": "DIVIDE([Gross Margin], [Total Sales])",
+            "formatString": "0.0%"
+          },
+          {
+            "name": "Sales YTD",
+            "expression": "CALCULATE([Total Sales], DATESYTD('Date'[Date]))",
+            "formatString": "#,##0.00",
+            "description": "Year-to-date sales using DATESYTD"
+          },
+          {
+            "name": "Sales PY",
+            "expression": "CALCULATE([Total Sales], SAMEPERIODLASTYEAR('Date'[Date]))",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "YoY Growth %",
+            "expression": "DIVIDE([Total Sales] - [Sales PY], [Sales PY])",
+            "formatString": "+0.0%;-0.0%;0.0%"
+          },
+          {
+            "name": "Transaction Count",
+            "expression": "COUNTROWS(Sales)",
+            "formatString": "#,##0"
+          },
+          {
+            "name": "Avg Sale Value",
+            "expression": "DIVIDE([Total Sales], [Transaction Count])",
+            "formatString": "#,##0.00"
+          }
+        ]
+      },
+      {
+        "name": "Product",
+        "columns": [
+          { "name": "ProductId", "dataType": "int64", "isKey": true },
+          { "name": "ProductName", "dataType": "string" },
+          { "name": "Category", "dataType": "string" },
+          { "name": "SubCategory", "dataType": "string" },
+          { "name": "Brand", "dataType": "string" },
+          { "name": "StandardCost", "dataType": "decimal" },
+          { "name": "ListPrice", "dataType": "decimal" },
+          { "name": "IsActive", "dataType": "boolean" }
+        ],
+        "measures": []
+      },
+      {
+        "name": "Customer",
+        "columns": [
+          { "name": "CustomerId", "dataType": "int64", "isKey": true },
+          { "name": "CustomerName", "dataType": "string" },
+          { "name": "EmailAddress", "dataType": "string" },
+          { "name": "Country", "dataType": "string" },
+          { "name": "State", "dataType": "string" },
+          { "name": "City", "dataType": "string" },
+          { "name": "Segment", "dataType": "string" },
+          { "name": "AnnualIncome", "dataType": "decimal" }
+        ],
+        "measures": []
+      },
+      {
+        "name": "Date",
+        "columns": [
+          { "name": "Date", "dataType": "dateTime", "isKey": true },
+          { "name": "Year", "dataType": "int64" },
+          { "name": "Quarter", "dataType": "int64" },
+          { "name": "QuarterLabel", "dataType": "string" },
+          { "name": "Month", "dataType": "int64" },
+          { "name": "MonthName", "dataType": "string" },
+          { "name": "MonthYear", "dataType": "string" },
+          { "name": "WeekOfYear", "dataType": "int64" },
+          { "name": "DayOfWeek", "dataType": "int64" },
+          { "name": "IsWeekend", "dataType": "boolean" },
+          { "name": "FiscalYear", "dataType": "int64" }
+        ],
+        "measures": []
+      },
+      {
+        "name": "Region",
+        "columns": [
+          { "name": "RegionId", "dataType": "int64", "isKey": true },
+          { "name": "RegionName", "dataType": "string" },
+          { "name": "Country", "dataType": "string" },
+          { "name": "Continent", "dataType": "string" }
+        ],
+        "measures": []
+      }
+    ],
+    "relationships": [
+      { "fromTable": "Sales", "fromColumn": "ProductId", "toTable": "Product", "toColumn": "ProductId", "crossFilteringBehavior": "OneToMany" },
+      { "fromTable": "Sales", "fromColumn": "CustomerId", "toTable": "Customer", "toColumn": "CustomerId", "crossFilteringBehavior": "OneToMany" },
+      { "fromTable": "Sales", "fromColumn": "OrderDate", "toTable": "Date", "toColumn": "Date", "crossFilteringBehavior": "OneToMany" },
+      { "fromTable": "Sales", "fromColumn": "RegionId", "toTable": "Region", "toColumn": "RegionId", "crossFilteringBehavior": "OneToMany" }
+    ]
+  }
+}

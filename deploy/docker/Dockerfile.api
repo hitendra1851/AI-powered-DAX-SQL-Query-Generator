@@ -1,0 +1,28 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY ["src/QueryMind.API/QueryMind.API.csproj", "src/QueryMind.API/"]
+COPY ["src/QueryMind.Application/QueryMind.Application.csproj", "src/QueryMind.Application/"]
+COPY ["src/QueryMind.Domain/QueryMind.Domain.csproj", "src/QueryMind.Domain/"]
+COPY ["src/QueryMind.Infrastructure/QueryMind.Infrastructure.csproj", "src/QueryMind.Infrastructure/"]
+COPY ["src/QueryMind.AI/QueryMind.AI.csproj", "src/QueryMind.AI/"]
+
+RUN dotnet restore "src/QueryMind.API/QueryMind.API.csproj"
+
+COPY . .
+
+RUN dotnet build "src/QueryMind.API/QueryMind.API.csproj" -c Release -o /app/build
+RUN dotnet publish "src/QueryMind.API/QueryMind.API.csproj" -c Release -o /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+RUN useradd -r -s /bin/false appuser
+USER appuser
+
+COPY --from=build /app/publish .
+
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080
+
+ENTRYPOINT ["dotnet", "QueryMind.API.dll"]

@@ -1,0 +1,162 @@
+{
+  "info": {
+    "name": "QueryMind AI API",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "apiKey", "value": "your-api-key-here" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /api/health",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Schemas",
+      "item": [
+        {
+          "name": "GET /api/schemas - List schemas",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/schemas",
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }]
+          }
+        },
+        {
+          "name": "POST /api/schemas/upload - Upload schema",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/schemas/upload",
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "powerbi_model_sample.json" },
+                { "key": "description", "value": "Power BI Sales Model", "type": "text" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/schemas/{id}",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/schemas/{{schemaId}}",
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sessions",
+      "item": [
+        {
+          "name": "POST /api/sessions - Create session",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sessions",
+            "header": [
+              { "key": "X-Api-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schemaId\": \"{{schemaId}}\",\n  \"defaultDialect\": \"Dax\",\n  \"title\": \"Sales Analysis Session\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /api/sessions/{id}/messages - Send query (SSE)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/sessions/{{sessionId}}/messages",
+            "header": [
+              { "key": "X-Api-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Show me total sales by product category for this year vs last year\",\n  \"dialect\": \"Dax\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET /api/sessions/{id}/history",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/sessions/{{sessionId}}/history",
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Feedback",
+      "item": [
+        {
+          "name": "POST /api/feedback",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/feedback",
+            "header": [
+              { "key": "X-Api-Key", "value": "{{apiKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageId\": \"{{messageId}}\",\n  \"rating\": 5,\n  \"comment\": \"Perfect DAX query!\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Templates",
+      "item": [
+        {
+          "name": "GET /api/templates - List all templates",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/templates",
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }]
+          }
+        },
+        {
+          "name": "GET /api/templates?dialect=Dax - DAX templates",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/templates?dialect=Dax",
+              "query": [{ "key": "dialect", "value": "Dax" }]
+            },
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "GET /api/admin/usage",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/admin/usage",
+            "header": [{ "key": "X-Api-Key", "value": "{{apiKey}}" }]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.DotSettings
+TestResults/
+publish/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# Secrets
+appsettings.*.local.json
+*.pfx
+*.p12
+.env
+.env.*
+
+# Docker volumes
+postgres_data/
+azurite_data/
+
+# Test results
+*.trx
+playwright-report/
+test-results/
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/settings.json
+
+# Azure
+.azure/
+
+# Misc
+*.log
+*.bak
+Thumbs.db
+.DS_Store

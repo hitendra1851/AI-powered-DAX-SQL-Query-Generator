@@ -1,0 +1,86 @@
+{
+  "name": "WoundCare_Lakehouse",
+  "description": "Microsoft Fabric Lakehouse Bronze/Silver/Gold schema for wound care analytics",
+  "tables": [
+    {
+      "name": "Bronze_WoundVisits_Raw",
+      "description": "Fabric Lakehouse Bronze layer - raw ingested wound visit data from EMR",
+      "schema": [
+        { "name": "visit_id", "type": "string", "isPartitionField": false },
+        { "name": "patient_mrn", "type": "string" },
+        { "name": "facility_code", "type": "string" },
+        { "name": "visit_date", "type": "string" },
+        { "name": "wound_type_raw", "type": "string" },
+        { "name": "wound_area_raw", "type": "string" },
+        { "name": "clinician_npi", "type": "string" },
+        { "name": "emr_source", "type": "string" },
+        { "name": "ingested_at", "type": "timestamp" },
+        { "name": "ingestion_date", "type": "date", "isPartitionField": true }
+      ]
+    },
+    {
+      "name": "Silver_WoundVisits_Cleansed",
+      "description": "Fabric Lakehouse Silver layer - cleansed and validated wound visit data",
+      "schema": [
+        { "name": "visit_id", "type": "string", "isPartitionField": false },
+        { "name": "patient_id", "type": "long" },
+        { "name": "facility_id", "type": "integer" },
+        { "name": "clinician_id", "type": "integer" },
+        { "name": "visit_date", "type": "date" },
+        { "name": "wound_type_code", "type": "string" },
+        { "name": "wound_area_cm2", "type": "double" },
+        { "name": "wound_depth_cm", "type": "double" },
+        { "name": "healing_progress_pct", "type": "double" },
+        { "name": "is_healed", "type": "boolean" },
+        { "name": "total_cost", "type": "decimal(18,2)" },
+        { "name": "billed_amount", "type": "decimal(18,2)" },
+        { "name": "is_valid", "type": "boolean" },
+        { "name": "validation_errors", "type": "string" },
+        { "name": "processing_date", "type": "date", "isPartitionField": true }
+      ]
+    },
+    {
+      "name": "Gold_WoundAnalytics_Summary",
+      "description": "Fabric Lakehouse Gold layer - aggregated wound analytics for reporting",
+      "schema": [
+        { "name": "facility_id", "type": "integer", "isPartitionField": false },
+        { "name": "facility_name", "type": "string" },
+        { "name": "facility_type", "type": "string" },
+        { "name": "region", "type": "string" },
+        { "name": "report_month", "type": "date", "isPartitionField": true },
+        { "name": "wound_type_code", "type": "string" },
+        { "name": "wound_type_name", "type": "string" },
+        { "name": "total_visits", "type": "long" },
+        { "name": "unique_patients", "type": "long" },
+        { "name": "healed_count", "type": "long" },
+        { "name": "healing_rate_pct", "type": "double" },
+        { "name": "avg_days_to_heal", "type": "double" },
+        { "name": "avg_wound_area_cm2", "type": "double" },
+        { "name": "total_cost", "type": "decimal(18,2)" },
+        { "name": "avg_cost_per_visit", "type": "decimal(18,2)" },
+        { "name": "total_billed", "type": "decimal(18,2)" },
+        { "name": "total_reimbursed", "type": "decimal(18,2)" },
+        { "name": "denial_rate_pct", "type": "double" },
+        { "name": "collection_rate_pct", "type": "double" }
+      ]
+    },
+    {
+      "name": "Gold_PatientOutcomes",
+      "description": "Fabric Lakehouse Gold layer - patient-level outcome metrics",
+      "schema": [
+        { "name": "patient_id", "type": "long", "isPartitionField": false },
+        { "name": "fiscal_year", "type": "integer", "isPartitionField": true },
+        { "name": "total_visits", "type": "long" },
+        { "name": "distinct_wound_types", "type": "integer" },
+        { "name": "is_chronic_wound_patient", "type": "boolean" },
+        { "name": "first_visit_date", "type": "date" },
+        { "name": "last_visit_date", "type": "date" },
+        { "name": "days_in_care", "type": "integer" },
+        { "name": "total_cost", "type": "decimal(18,2)" },
+        { "name": "insurance_type", "type": "string" },
+        { "name": "primary_facility_id", "type": "integer" },
+        { "name": "outcome_status", "type": "string" }
+      ]
+    }
+  ]
+}
