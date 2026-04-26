@@ -18,14 +18,6 @@ export class QueryMindStack extends cdk.Stack {
     const imageTag = this.node.tryGetContext('imageTag') ?? 'latest';
 
     // ── Secrets ─────────────────────────────────────────────────────────────
-    const anthropicSecret = new secretsmanager.Secret(this, 'AnthropicSecret', {
-      secretName: '/querymind/anthropic-api-key',
-      description: 'Anthropic API key for QueryMind AI',
-      secretStringValue: cdk.SecretValue.unsafePlainText(
-        process.env.ANTHROPIC_API_KEY ?? 'REPLACE_ME'
-      )
-    });
-
     const dbPasswordSecret = new secretsmanager.Secret(this, 'DbPasswordSecret', {
       secretName: '/querymind/db-password',
       description: 'PostgreSQL admin password',
@@ -107,8 +99,22 @@ export class QueryMindStack extends cdk.Stack {
     });
 
     schemaBucket.grantReadWrite(appRunnerRole);
-    anthropicSecret.grantRead(appRunnerRole);
     dbPasswordSecret.grantRead(appRunnerRole);
+
+    // Bedrock: allow the App Runner instance role to call the inference profile
+    appRunnerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockInvoke',
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+        'bedrock:Converse',
+        'bedrock:ConverseStream'
+      ],
+      resources: [
+        'arn:aws:bedrock:us-east-1:183631304469:inference-profile/us.anthropic.claude-opus-4-7',
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7*'
+      ]
+    }));
 
     // ── IAM — App Runner ECR access role ────────────────────────────────────
     const ecrAccessRole = new iam.Role(this, 'EcrAccessRole', {
@@ -144,13 +150,8 @@ export class QueryMindStack extends cdk.Stack {
               { name: 'ASPNETCORE_URLS', value: 'http://+:8080' },
               { name: 'AWS__Region', value: this.region },
               { name: 'AWS__SchemaBucket', value: schemaBucket.bucketName },
+              { name: 'AWS__BedrockModelId', value: 'arn:aws:bedrock:us-east-1:183631304469:inference-profile/us.anthropic.claude-opus-4-7' },
               { name: 'Cors__Origins__0', value: '' }  // Filled in after CloudFront URL known
-            ],
-            runtimeEnvironmentSecrets: [
-              {
-                name: 'Anthropic__ApiKey',
-                value: anthropicSecret.secretArn
-              }
             ]
           }
         }
@@ -162,8 +163,7 @@ export class QueryMindStack extends cdk.Stack {
       },
       networkConfiguration: {
         egressConfiguration: {
-          // DEFAULT keeps App Runner internet access (for Anthropic API calls)
-          // VPC connector provides access to RDS in private subnets
+          // VPC egress: connector reaches RDS; App Runner retains internet access for Bedrock
           egressType: 'VPC',
           vpcConnectorArn: vpcConnector.attrVpcConnectorArn
         },

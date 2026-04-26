@@ -9,7 +9,7 @@
     <ProjectReference Include="..\QueryMind.Infrastructure\QueryMind.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Anthropic.SDK" Version="3.4.0" />
+    <PackageReference Include="AWSSDK.BedrockRuntime" Version="3.7.305.11" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />

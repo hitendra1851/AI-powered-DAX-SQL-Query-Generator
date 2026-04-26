@@ -36,8 +36,9 @@ In your GitHub repo → Settings → Secrets and variables → Actions → New r
 | `AWS_ACCESS_KEY_ID` | `AKIA...` | From IAM user created above |
 | `AWS_SECRET_ACCESS_KEY` | `...` | From IAM user created above |
 | `AWS_REGION` | `us-east-1` | Your preferred AWS region |
-| `ANTHROPIC_API_KEY` | `sk-ant-...` | From console.anthropic.com |
 | `DB_PASSWORD` | (choose a strong password) | Min 8 chars, letters + numbers |
+
+> **No Anthropic API key needed.** Claude is accessed via AWS Bedrock Runtime using the same IAM credentials. The App Runner instance role is granted `bedrock:ConverseStream` automatically by CDK.
 
 ---
 

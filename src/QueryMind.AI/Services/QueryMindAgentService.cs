@@ -1,8 +1,11 @@
-using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
+using Amazon;
+using Amazon.BedrockRuntime;
+using Amazon.BedrockRuntime.Model;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using QueryMind.AI.Prompts;
@@ -17,170 +20,177 @@ public partial class QueryMindAgentService(
     ILogger<QueryMindAgentService> logger
 ) : IQueryMindAgent
 {
-    private const string ModelId = "claude-sonnet-4-20250514";
-    private const int MaxTokens = 4096;
-    private readonly string _apiKey = configuration["Anthropic:ApiKey"]
-        ?? throw new InvalidOperationException("Anthropic:ApiKey is required");
+    private readonly string _modelId = configuration["AWS:BedrockModelId"]
+        ?? "arn:aws:bedrock:us-east-1:183631304469:inference-profile/us.anthropic.claude-opus-4-7";
+
+    private readonly string _region = configuration["AWS:Region"] ?? "us-east-1";
+
+    private const int MaxTokens = 32000;
 
     public async IAsyncEnumerable<AgentStreamEvent> GenerateQueryAsync(
         AgentRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var tools = new QueryMindTools(searchService);
-
-        // Schema context is fetched and passed in by SessionsController before the agent is called
         var schemaContext = request.SchemaContext;
-
         var systemPrompt = SystemPromptBuilder.Build(request.PreferredDialect, schemaContext);
 
-        var messages = BuildMessages(request);
+        // IAM credentials come from the environment:
+        //   - App Runner: instance role attached in CDK
+        //   - Local dev:  AWS_PROFILE / AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+        var client = new AmazonBedrockRuntimeClient(RegionEndpoint.GetBySystemName(_region));
 
-        var payload = new
+        var converseRequest = new ConverseStreamRequest
         {
-            model = ModelId,
-            max_tokens = MaxTokens,
-            system = systemPrompt,
-            tools = QueryMindTools.ToolDefinitions,
-            stream = true,
-            messages
+            ModelId = _modelId,
+            System = [new SystemContentBlock { Text = systemPrompt }],
+            Messages = BuildBedrockMessages(request),
+            InferenceConfig = new InferenceConfiguration
+            {
+                MaxTokens = MaxTokens
+            },
+            ToolConfig = new ToolConfiguration
+            {
+                Tools = QueryMindTools.BedrockToolDefinitions,
+                ToolChoice = new ToolChoice { Auto = new AutoToolChoice() }
+            },
+            PerformanceConfig = new PerformanceConfiguration
+            {
+                Latency = PerformanceConfigLatency.Standard
+            }
         };
 
+        // Bridge event-based AWS SDK stream → IAsyncEnumerable via a Channel
+        var channel = Channel.CreateUnbounded<AgentStreamEvent>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+        var streamTask = ProcessStreamAsync(client, converseRequest, searchService, channel.Writer, logger, ct);
+
+        await foreach (var evt in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            yield return evt;
+
+        // Propagate any exception from the stream task
+        await streamTask.ConfigureAwait(false);
+    }
+
+    private static async Task ProcessStreamAsync(
+        AmazonBedrockRuntimeClient client,
+        ConverseStreamRequest request,
+        ISchemaSearchService searchService,
+        ChannelWriter<AgentStreamEvent> writer,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var tools = new QueryMindTools(searchService);
         var fullContent = new StringBuilder();
+        var toolInputBuilder = new StringBuilder();
+        string? currentToolName = null;
+        string? currentToolUseId = null;
         var inputTokens = 0;
         var outputTokens = 0;
 
-        using var httpClient = new HttpClient();
-        httpClient.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-        httpClient.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-
-        var jsonPayload = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
-        HttpResponseMessage response;
         try
         {
-            response = await httpClient.PostAsync("https://api.anthropic.com/v1/messages", content, ct);
-            response.EnsureSuccessStatusCode();
+            var response = await client.ConverseStreamAsync(request, ct).ConfigureAwait(false);
+
+            await foreach (var streamEvent in response.Stream.ConfigureAwait(false))
+            {
+                switch (streamEvent)
+                {
+                    case ContentBlockDeltaEvent delta:
+                        if (delta.Delta?.Text is { Length: > 0 } text)
+                        {
+                            fullContent.Append(text);
+                            await writer.WriteAsync(
+                                new AgentStreamEvent(AgentStreamEventType.TextDelta, Delta: text), ct);
+                        }
+                        else if (delta.Delta?.ToolUse?.Input is { Length: > 0 } toolInput)
+                        {
+                            toolInputBuilder.Append(toolInput);
+                        }
+                        break;
+
+                    case ContentBlockStartEvent start:
+                        if (start.ContentBlock?.ToolUse is { } toolUseBlock)
+                        {
+                            currentToolName = toolUseBlock.Name;
+                            currentToolUseId = toolUseBlock.ToolUseId;
+                            toolInputBuilder.Clear();
+                        }
+                        break;
+
+                    case ContentBlockStopEvent:
+                        if (currentToolName != null)
+                        {
+                            try
+                            {
+                                var toolJson = toolInputBuilder.ToString();
+                                var toolInput = JsonDocument.Parse(toolJson.Length > 0 ? toolJson : "{}").RootElement;
+                                var toolResult = await tools.ExecuteToolAsync(currentToolName, toolInput, null, ct)
+                                    .ConfigureAwait(false);
+
+                                var toolMsg = $"\n[{currentToolName}]\n{toolResult}\n";
+                                fullContent.Append(toolMsg);
+                                await writer.WriteAsync(
+                                    new AgentStreamEvent(AgentStreamEventType.TextDelta, Delta: toolMsg), ct);
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Tool {Tool} execution failed", currentToolName);
+                            }
+
+                            currentToolName = null;
+                            currentToolUseId = null;
+                        }
+                        break;
+
+                    case MessageDeltaEvent msgDelta:
+                        inputTokens = msgDelta.Usage?.InputTokens ?? inputTokens;
+                        outputTokens = msgDelta.Usage?.OutputTokens ?? outputTokens;
+                        break;
+                }
+            }
+
+            var final = fullContent.ToString();
+            await writer.WriteAsync(new AgentStreamEvent(
+                AgentStreamEventType.Complete,
+                FullContent: final,
+                GeneratedQuery: ExtractQuery(final),
+                Explanation: ExtractExplanation(final),
+                SchemaContextUsed: request.System.FirstOrDefault()?.Text,
+                InputTokens: inputTokens,
+                OutputTokens: outputTokens
+            ), ct);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to call Anthropic API");
-            yield return new AgentStreamEvent(AgentStreamEventType.Error, FullContent: ex.Message);
-            yield break;
+            logger.LogError(ex, "Bedrock ConverseStream failed");
+            await writer.WriteAsync(
+                new AgentStreamEvent(AgentStreamEventType.Error, FullContent: ex.Message), ct);
         }
-
-        using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var reader = new StreamReader(stream);
-
-        string? currentToolName = null;
-        var toolInputBuilder = new StringBuilder();
-        var toolCallPending = false;
-
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
+        finally
         {
-            var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
-
-            var data = line[6..];
-            if (data == "[DONE]") break;
-
-            JsonElement evt;
-            try { evt = JsonDocument.Parse(data).RootElement; }
-            catch { continue; }
-
-            var evtType = evt.TryGetProperty("type", out var t) ? t.GetString() : null;
-
-            switch (evtType)
-            {
-                case "content_block_start":
-                    if (evt.TryGetProperty("content_block", out var cb) &&
-                        cb.TryGetProperty("type", out var cbType) && cbType.GetString() == "tool_use")
-                    {
-                        currentToolName = cb.TryGetProperty("name", out var tn) ? tn.GetString() : null;
-                        toolInputBuilder.Clear();
-                        toolCallPending = true;
-                    }
-                    break;
-
-                case "content_block_delta":
-                    if (!evt.TryGetProperty("delta", out var delta)) break;
-                    var deltaType = delta.TryGetProperty("type", out var dt) ? dt.GetString() : null;
-
-                    if (deltaType == "text_delta" && delta.TryGetProperty("text", out var textEl))
-                    {
-                        var text = textEl.GetString() ?? "";
-                        fullContent.Append(text);
-                        yield return new AgentStreamEvent(AgentStreamEventType.TextDelta, Delta: text);
-                    }
-                    else if (deltaType == "input_json_delta" && delta.TryGetProperty("partial_json", out var pj))
-                    {
-                        toolInputBuilder.Append(pj.GetString());
-                    }
-                    break;
-
-                case "content_block_stop":
-                    if (toolCallPending && currentToolName != null)
-                    {
-                        toolCallPending = false;
-                        var toolInputJson = toolInputBuilder.ToString();
-                        var schemaId = request.SchemaId != Guid.Empty ? request.SchemaId : (Guid?)null;
-
-                        try
-                        {
-                            var toolInput = JsonDocument.Parse(toolInputJson.Length > 0 ? toolInputJson : "{}").RootElement;
-                            var toolResult = await tools.ExecuteToolAsync(currentToolName, toolInput, schemaId, ct);
-
-                            var toolMsg = $"\n[Schema Context Retrieved]\n{toolResult}\n";
-                            fullContent.Append(toolMsg);
-                            yield return new AgentStreamEvent(AgentStreamEventType.TextDelta, Delta: toolMsg);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogWarning(ex, "Tool execution failed for {ToolName}", currentToolName);
-                        }
-
-                        currentToolName = null;
-                    }
-                    break;
-
-                case "message_delta":
-                    if (evt.TryGetProperty("usage", out var usage))
-                    {
-                        outputTokens = usage.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : 0;
-                    }
-                    break;
-
-                case "message_start":
-                    if (evt.TryGetProperty("message", out var msg) && msg.TryGetProperty("usage", out var msgUsage))
-                    {
-                        inputTokens = msgUsage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0;
-                    }
-                    break;
-            }
+            writer.Complete();
         }
-
-        var finalContent = fullContent.ToString();
-        var generatedQuery = ExtractQuery(finalContent);
-        var explanation = ExtractExplanation(finalContent);
-
-        yield return new AgentStreamEvent(
-            AgentStreamEventType.Complete,
-            FullContent: finalContent,
-            GeneratedQuery: generatedQuery,
-            Explanation: explanation,
-            SchemaContextUsed: schemaContext,
-            InputTokens: inputTokens,
-            OutputTokens: outputTokens
-        );
     }
 
-    private static List<object> BuildMessages(AgentRequest request)
+    private static List<Message> BuildBedrockMessages(AgentRequest request)
     {
         var messages = request.History
-            .Select(h => (object)new { role = h.Role.ToString().ToLower(), content = h.Content })
+            .Select(h => new Message
+            {
+                Role = h.Role == MessageRole.User
+                    ? ConversationRole.User
+                    : ConversationRole.Assistant,
+                Content = [new ContentBlock { Text = h.Content }]
+            })
             .ToList();
 
-        messages.Add(new { role = "user", content = request.UserMessage });
+        messages.Add(new Message
+        {
+            Role = ConversationRole.User,
+            Content = [new ContentBlock { Text = request.UserMessage }]
+        });
+
         return messages;
     }
 
@@ -194,11 +204,9 @@ public partial class QueryMindAgentService(
     {
         var withoutCode = QueryBlockRegex().Replace(content, "").Trim();
         var lines = withoutCode.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        var explanationLines = lines.SkipWhile(l => l.StartsWith('#') || l.StartsWith("**")).Take(5);
-        return string.Join(" ", explanationLines).Trim();
+        return string.Join(" ", lines.SkipWhile(l => l.StartsWith('#') || l.StartsWith("**")).Take(5)).Trim();
     }
 
     [GeneratedRegex(@"```(dax|sql|soql)?\s*\n(.*?)```", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
     private static partial Regex QueryBlockRegex();
 }
-

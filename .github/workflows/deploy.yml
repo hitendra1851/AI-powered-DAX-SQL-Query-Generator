@@ -78,7 +78,6 @@ jobs:
       - name: CDK Deploy
         working-directory: infrastructure
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           npx cdk deploy QueryMindStack \

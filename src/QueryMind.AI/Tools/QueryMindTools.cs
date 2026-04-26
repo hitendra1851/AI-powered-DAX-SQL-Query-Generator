@@ -1,59 +1,105 @@
 using System.Text.Json;
+using Amazon.BedrockRuntime.Model;
+using Amazon.Runtime.Documents;
 using QueryMind.Domain.Interfaces;
 
 namespace QueryMind.AI.Tools;
 
 public class QueryMindTools(ISchemaSearchService searchService)
 {
-    public static readonly IReadOnlyList<object> ToolDefinitions =
+    // Bedrock Converse API tool definitions (Amazon.BedrockRuntime.Model.Tool)
+    public static readonly List<Tool> BedrockToolDefinitions =
     [
-        new
+        new Tool
         {
-            name = "get_schema_context",
-            description = "Retrieve relevant schema information (tables, columns, measures, relationships) based on the user's query. Always call this before generating a query to ensure you have accurate schema details.",
-            input_schema = new
+            ToolSpec = new ToolSpecification
             {
-                type = "object",
-                properties = new
+                Name = "get_schema_context",
+                Description = "Retrieve relevant schema information (tables, columns, measures, relationships) " +
+                              "based on the user query. Call this before generating a query to ensure accuracy.",
+                InputSchema = new ToolInputSchema
                 {
-                    query = new { type = "string", description = "The natural language query or keywords to search for in the schema" },
-                    schema_id = new { type = "string", description = "The UUID of the schema to search in" }
-                },
-                required = new[] { "query", "schema_id" }
+                    Json = BuildDocument(new Dictionary<string, Document>
+                    {
+                        ["type"] = "object",
+                        ["properties"] = BuildDocument(new Dictionary<string, Document>
+                        {
+                            ["query"] = BuildDocument(new Dictionary<string, Document>
+                            {
+                                ["type"] = "string",
+                                ["description"] = "Keywords to search for in the schema"
+                            }),
+                            ["schema_id"] = BuildDocument(new Dictionary<string, Document>
+                            {
+                                ["type"] = "string",
+                                ["description"] = "UUID of the schema to search"
+                            })
+                        }),
+                        ["required"] = BuildList(["query", "schema_id"])
+                    })
+                }
             }
         },
-        new
+        new Tool
         {
-            name = "validate_dax_syntax",
-            description = "Validate DAX syntax for common errors. Returns a list of issues found.",
-            input_schema = new
+            ToolSpec = new ToolSpecification
             {
-                type = "object",
-                properties = new
+                Name = "validate_dax_syntax",
+                Description = "Check a DAX expression for common performance and correctness issues.",
+                InputSchema = new ToolInputSchema
                 {
-                    dax = new { type = "string", description = "The DAX expression to validate" }
-                },
-                required = new[] { "dax" }
+                    Json = BuildDocument(new Dictionary<string, Document>
+                    {
+                        ["type"] = "object",
+                        ["properties"] = BuildDocument(new Dictionary<string, Document>
+                        {
+                            ["dax"] = BuildDocument(new Dictionary<string, Document>
+                            {
+                                ["type"] = "string",
+                                ["description"] = "The DAX expression to validate"
+                            })
+                        }),
+                        ["required"] = BuildList(["dax"])
+                    })
+                }
             }
         },
-        new
+        new Tool
         {
-            name = "get_query_examples",
-            description = "Get example queries for a specific query type or pattern.",
-            input_schema = new
+            ToolSpec = new ToolSpecification
             {
-                type = "object",
-                properties = new
+                Name = "get_query_examples",
+                Description = "Return example queries for a specific pattern (e.g. time_intelligence_ytd, running_total, rank_top_n).",
+                InputSchema = new ToolInputSchema
                 {
-                    query_type = new { type = "string", description = "Type of query pattern, e.g. 'time_intelligence_ytd', 'running_total', 'rank_top_n', 'period_over_period'" },
-                    dialect = new { type = "string", description = "Query dialect: 'dax', 'sql', 'soql'" }
-                },
-                required = new[] { "query_type", "dialect" }
+                    Json = BuildDocument(new Dictionary<string, Document>
+                    {
+                        ["type"] = "object",
+                        ["properties"] = BuildDocument(new Dictionary<string, Document>
+                        {
+                            ["query_type"] = BuildDocument(new Dictionary<string, Document>
+                            {
+                                ["type"] = "string",
+                                ["description"] = "Pattern name: time_intelligence_ytd | running_total | rank_top_n | period_over_period"
+                            }),
+                            ["dialect"] = BuildDocument(new Dictionary<string, Document>
+                            {
+                                ["type"] = "string",
+                                ["description"] = "dax | sql | soql"
+                            })
+                        }),
+                        ["required"] = BuildList(["query_type", "dialect"])
+                    })
+                }
             }
         }
     ];
 
-    public async Task<string> ExecuteToolAsync(string toolName, JsonElement input, Guid? schemaId, CancellationToken ct = default)
+    public async Task<string> ExecuteToolAsync(
+        string toolName,
+        JsonElement input,
+        Guid? schemaId,
+        CancellationToken ct = default)
     {
         return toolName switch
         {
@@ -68,11 +114,11 @@ public class QueryMindTools(ISchemaSearchService searchService)
     {
         var query = input.GetProperty("query").GetString() ?? string.Empty;
         var idStr = input.TryGetProperty("schema_id", out var sid) ? sid.GetString() : null;
+        var targetId = idStr != null && Guid.TryParse(idStr, out var pid) ? pid : schemaId;
 
-        var targetId = idStr != null && Guid.TryParse(idStr, out var parsedId) ? parsedId : schemaId;
-        if (targetId == null) return "No schema loaded. Please upload a schema file first.";
+        if (targetId == null) return "No schema loaded. Upload a schema file first.";
 
-        return await searchService.SearchSchemaContextAsync(targetId.Value, query, topK: 6, ct);
+        return await searchService.SearchSchemaContextAsync(targetId.Value, query, topK: 5, ct);
     }
 
     private static string ValidateDaxSyntax(JsonElement input)
@@ -81,18 +127,18 @@ public class QueryMindTools(ISchemaSearchService searchService)
         var issues = new List<string>();
 
         if (dax.Contains('/') && !dax.Contains("DIVIDE", StringComparison.OrdinalIgnoreCase))
-            issues.Add("Consider using DIVIDE() instead of / to handle division-by-zero safely.");
+            issues.Add("Use DIVIDE() instead of / to handle division-by-zero safely.");
 
         if (dax.Contains("DISTINCTCOUNT", StringComparison.OrdinalIgnoreCase))
-            issues.Add("DISTINCTCOUNT on large columns can be slow. Consider using SUMMARIZE + COUNTROWS for better performance.");
+            issues.Add("DISTINCTCOUNT on large columns is slow — consider SUMMARIZE + COUNTROWS.");
 
-        if (dax.Contains("ALL(", StringComparison.OrdinalIgnoreCase) && dax.Contains("CALCULATE", StringComparison.OrdinalIgnoreCase))
-            issues.Add("ALL() inside CALCULATE removes all filters. Ensure this is intentional — consider ALLEXCEPT if you want to preserve some filters.");
+        if (dax.Contains("ALL(", StringComparison.OrdinalIgnoreCase) &&
+            dax.Contains("CALCULATE", StringComparison.OrdinalIgnoreCase))
+            issues.Add("ALL() inside CALCULATE removes all filters — use ALLEXCEPT if partial filter removal is intended.");
 
-        if (!issues.Any())
-            return "DAX syntax looks good. No common performance or correctness issues detected.";
-
-        return "DAX Validation Results:\n" + string.Join("\n", issues.Select(i => $"- {i}"));
+        return issues.Count == 0
+            ? "No common issues found."
+            : "DAX issues:\n" + string.Join("\n", issues.Select(i => $"- {i}"));
     }
 
     private static string GetQueryExamples(JsonElement input)
@@ -102,55 +148,24 @@ public class QueryMindTools(ISchemaSearchService searchService)
 
         return (queryType, dialect) switch
         {
-            ("time_intelligence_ytd", "dax") => """
-                Example: Year-to-Date Sales
-                ```dax
-                YTD Sales = CALCULATE([Total Sales], DATESYTD('Date'[Date]))
-                ```
-                Use DATESYTD with a date column from your date table. Ensure your model has a marked date table.
-                """,
-            ("running_total", "dax") => """
-                Example: Running Total
-                ```dax
-                Running Total = CALCULATE([Total Sales], FILTER(ALL('Date'), 'Date'[Date] <= MAX('Date'[Date])))
-                ```
-                """,
-            ("rank_top_n", "dax") => """
-                Example: Top N ranking
-                ```dax
-                Product Rank = RANKX(ALL('Product'), [Total Sales])
-                Top 10 Flag = IF([Product Rank] <= 10, "Top 10", "Other")
-                ```
-                """,
-            ("period_over_period", "dax") => """
-                Example: Month-over-Month change
-                ```dax
-                MoM Change % = DIVIDE([Total Sales] - [Sales PY Month], [Sales PY Month])
-                Sales PY Month = CALCULATE([Total Sales], DATEADD('Date'[Date], -1, MONTH))
-                ```
-                """,
-            ("running_total", "sql") => """
-                Example: Running total with window function
-                ```sql
-                SELECT
-                    order_date,
-                    amount,
-                    SUM(amount) OVER (ORDER BY order_date ROWS UNBOUNDED PRECEDING) AS running_total
-                FROM orders
-                ```
-                """,
-            ("rank_top_n", "sql") => """
-                Example: Top N with DENSE_RANK
-                ```sql
-                WITH ranked AS (
-                    SELECT product_id, SUM(revenue) AS total_revenue,
-                           DENSE_RANK() OVER (ORDER BY SUM(revenue) DESC) AS rnk
-                    FROM sales GROUP BY product_id
-                )
-                SELECT * FROM ranked WHERE rnk <= 10
-                ```
-                """,
-            _ => $"No specific example found for '{queryType}' in {dialect}. Please describe your query pattern and I will generate one from your schema."
+            ("time_intelligence_ytd", "dax") =>
+                "```dax\nYTD Sales = CALCULATE([Total Sales], DATESYTD('Date'[Date]))\n```\nRequires a marked date table.",
+            ("running_total", "dax") =>
+                "```dax\nRunning Total = CALCULATE([Total Sales], FILTER(ALL('Date'), 'Date'[Date] <= MAX('Date'[Date])))\n```",
+            ("rank_top_n", "dax") =>
+                "```dax\nProduct Rank = RANKX(ALL('Product'), [Total Sales])\nTop 10 Flag = IF([Product Rank] <= 10, \"Top 10\", \"Other\")\n```",
+            ("period_over_period", "dax") =>
+                "```dax\nSales PY = CALCULATE([Total Sales], SAMEPERIODLASTYEAR('Date'[Date]))\nYoY% = DIVIDE([Total Sales] - [Sales PY], [Sales PY])\n```",
+            ("running_total", "sql") =>
+                "```sql\nSELECT order_date, SUM(amount) OVER (ORDER BY order_date ROWS UNBOUNDED PRECEDING) AS running_total\nFROM orders\n```",
+            ("rank_top_n", "sql") =>
+                "```sql\nWITH ranked AS (\n  SELECT product_id, SUM(revenue) total, DENSE_RANK() OVER (ORDER BY SUM(revenue) DESC) rnk\n  FROM sales GROUP BY product_id\n)\nSELECT * FROM ranked WHERE rnk <= 10\n```",
+            _ => $"No canned example for '{queryType}' in {dialect}. Describe your goal and I will generate from your schema."
         };
     }
+
+    // Helpers to build Amazon.Runtime.Documents.Document from primitives
+    private static Document BuildDocument(Dictionary<string, Document> dict) => new(dict);
+    private static Document BuildList(IEnumerable<string> items) =>
+        new(items.Select(s => new Document(s)).ToList());
 }
